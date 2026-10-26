@@ -9,8 +9,9 @@ import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import lombok.RequiredArgsConstructor;
+import net.dryuf.base.security.annotation.SecureIgnoreNull;
+import net.dryuf.base.security.annotation.SecureWrite;
 import net.dryuf.base.security.identity.IdentityContext;
-import net.dryuf.jackson.annotation.SecureWriteField;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.BeanDescription;
 import tools.jackson.databind.JsonNode;
@@ -49,7 +50,7 @@ import java.util.stream.Stream;
 @Default
 @ApplicationScoped
 @RequiredArgsConstructor(onConstructor_ = {@Inject})
-public class SecureFieldWriter
+public class SecureSerializer
 {
 	public enum Mode
 	{
@@ -71,23 +72,28 @@ public class SecureFieldWriter
 
 	private final Map<Class<?>, Map<String, PropertyAccess>> propertiesCache = new ConcurrentHashMap<>();
 
-	public <T> T apply(T target, ObjectNode input, Mode mode, IdentityContext identity)
+	public <T> T deserialize(T target, ObjectNode input, Mode mode, IdentityContext identity)
 	{
 		Map<String, PropertyAccess> properties = propertiesCache.computeIfAbsent(target.getClass(), this::introspect);
 
 		ObjectNode accepted = objectMapper.createObjectNode();
 		List<String> denied = new ArrayList<>();
 		for (Map.Entry<String, JsonNode> entry : input.properties()) {
-			PropertyAccess property = properties.get(entry.getKey());
+			String key = entry.getKey();
+			PropertyAccess property = properties.get(key);
 			if (property == null) {
 				throw error(BadRequestException::new, Response.Status.BAD_REQUEST,
 					"Unknown field: "+entry.getKey());
 			}
-			if (property.canWrite(identity)) {
-				accepted.set(entry.getKey(), entry.getValue());
+			final JsonNode value = entry.getValue();
+			if (value.isNull() && property.ignoreNull) {
+				// ignore
 			}
-			else if (!sameValue(property.read(target, objectMapper), entry.getValue())) {
-				denied.add(entry.getKey());
+			else if (property.canWrite(identity)) {
+				accepted.set(key, value);
+			}
+			else if (!sameValue(property.read(target, objectMapper), value)) {
+				denied.add(key);
 			}
 		}
 		if (!denied.isEmpty()) {
@@ -132,16 +138,24 @@ public class SecureFieldWriter
 			if (accessor != null) {
 				accessor.fixAccess(true);
 			}
-			SecureWriteField annotation = Stream.of(definition.getSetter(), definition.getField(), definition.getGetter())
+			SecureWrite secureWrite = Stream.of(definition.getSetter(), definition.getField(), definition.getGetter())
 				.filter(member -> member != null)
-				.map(member -> member.getAnnotation(SecureWriteField.class))
+				.map(member -> member.getAnnotation(SecureWrite.class))
+				.filter(a -> a != null)
+				.findFirst()
+				.orElse(null);
+			SecureIgnoreNull secureIgnoreNull = Stream.of(definition.getSetter(), definition.getField(),
+					definition.getGetter())
+				.filter(member -> member != null)
+				.map(member -> member.getAnnotation(SecureIgnoreNull.class))
 				.filter(a -> a != null)
 				.findFirst()
 				.orElse(null);
 			result.put(definition.getName(), new PropertyAccess(
 				accessor,
 				definition.getMutator() != null,
-				annotation == null ? null : annotation.rolesAllowed()
+				secureWrite == null ? null : secureWrite.rolesAllowed(),
+				secureIgnoreNull == null ? false : secureIgnoreNull.value()
 			));
 		}
 		return Map.copyOf(result);
@@ -165,7 +179,7 @@ public class SecureFieldWriter
 	 * @param rolesAllowed
 	 * 	roles allowed to write, null if unrestricted
 	 */
-	private record PropertyAccess(AnnotatedMember accessor, boolean mutable, String[] rolesAllowed)
+	private record PropertyAccess(AnnotatedMember accessor, boolean mutable, String[] rolesAllowed, boolean ignoreNull)
 	{
 		boolean canWrite(IdentityContext identity)
 		{
