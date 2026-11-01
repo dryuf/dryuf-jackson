@@ -8,7 +8,7 @@ Set of common utilities Jackson serialization.
 <dependency>
 	<groupId>net.dryuf</groupId>
 	<artifactId>dryuf-jackson</artifactId>
-	<version>1.0.0</version>
+	<version>1.0.1</version>
 </dependency>
 ```
 
