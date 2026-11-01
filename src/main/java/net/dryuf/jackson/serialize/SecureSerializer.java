@@ -72,7 +72,7 @@ public class SecureSerializer
 
 	private final Map<Class<?>, Map<String, PropertyAccess>> propertiesCache = new ConcurrentHashMap<>();
 
-	public <T> T deserialize(T target, ObjectNode input, Mode mode, IdentityContext identity)
+	public <T> T deserialize(T target, JsonNode input, Mode mode, IdentityContext identity)
 	{
 		Map<String, PropertyAccess> properties = propertiesCache.computeIfAbsent(target.getClass(), this::introspect);
 
